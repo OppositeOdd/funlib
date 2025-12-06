@@ -49,6 +49,10 @@ export interface SvgOptions {
   iconSpacing?: number
   /** duration in milliseconds. Set to 0 to use script.actualDuration */
   durationMs?: ms | 0
+  /** display chapter bar at the top of the heatmap */
+  showChapters?: boolean
+  /** height of chapter bar in pixels */
+  chapterHeight?: number
 }
 /** y between one axis G and the next */
 const SPACING_BETWEEN_AXES = 0
@@ -80,6 +84,8 @@ export const svgDefaultOptions: Required<SvgOptions> = {
   iconWidth: 46,
   iconSpacing: 0,
   durationMs: 0,
+  showChapters: false,
+  chapterHeight: 10,
 }
 
 export type SvgSubOptions<K extends keyof SvgOptions> = {
@@ -263,8 +269,15 @@ export function toSvgElement(scripts: Funscript | Funscript[], ops: SvgOptions):
   fullOps.width -= SVG_PADDING * 2
   const round = (x: number) => +x.toFixed(2)
 
+  // Check if any script has chapters and showChapters is enabled
+  const firstScript = scripts[0]
+  const hasChapters = fullOps.showChapters &&
+    firstScript?.metadata?.chapters &&
+    firstScript.metadata.chapters.length > 0
+  const chapterOffset = hasChapters ? fullOps.chapterHeight : 0
+
   const pieces: string[] = []
-  let y = SVG_PADDING
+  let y = SVG_PADDING + chapterOffset
   for (let s of scripts) {
     if (fullOps.normalize) s = s.clone().normalize()
     const durationMs = fullOps.durationMs || s.actualDuration * 1000
@@ -288,10 +301,69 @@ export function toSvgElement(scripts: Funscript | Funscript[], ops: SvgOptions):
   y -= SPACING_BETWEEN_FUNSCRIPTS
   y += SVG_PADDING
 
+  // Generate chapter bar if enabled, unsure where to put this but feel free to move to better location
+  let chapterSvg = ''
+  if (hasChapters) {
+  // Randomly chosen colors, could probably be changed to reflect average speeds or something similar
+    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2']
+    const durationMs = fullOps.durationMs || firstScript.actualDuration * 1000
+    const chapterY = SVG_PADDING
+    const graphWidth = fullOps.width - fullOps.iconWidth - (fullOps.iconWidth > 0 ? fullOps.iconSpacing : 0)
+    const xOffset = SVG_PADDING + fullOps.iconWidth + (fullOps.iconWidth > 0 ? fullOps.iconSpacing : 0)
+
+    const chapterRects: string[] = []
+    const textHalos: string[] = []
+    const textElements: string[] = []
+
+    // Helper function to convert time string to milliseconds, not sure if this code is doubled up already
+    const timeToMs = (timeStr: string): number => {
+      const parts = timeStr.split(':')
+      const hours = parseInt(parts[0], 10)
+      const minutes = parseInt(parts[1], 10)
+      const seconds = parseFloat(parts[2])
+      return (hours * 3600 + minutes * 60 + seconds) * 1000
+    }
+    // Build chapter elements
+    firstScript.metadata.chapters.forEach((chapter, idx) => {
+      const startMs = (chapter as any).startAt ?? timeToMs((chapter as any).startTime)
+      const endMs = (chapter as any).endAt ?? timeToMs((chapter as any).endTime)
+
+      const startX = (startMs / durationMs) * graphWidth + xOffset
+      const endX = (endMs / durationMs) * graphWidth + xOffset
+      const chapterWidth = endX - startX
+      const color = colors[idx % colors.length]
+
+      chapterRects.push(
+        `    <rect x="${round(startX)}" y="${chapterY}" width="${round(chapterWidth)}" height="${fullOps.chapterHeight}" fill="${color}" opacity="0.5" rx="2" ry="2"/>`
+      )
+
+      // Only render chapter name text if the chapter is wide enough
+      if (chapterWidth > 30) {
+        const textX = round(startX + chapterWidth / 2)
+        const textY = round(chapterY + fullOps.chapterHeight / 2 + 3)
+        const fontSize = round(fullOps.chapterHeight * 0.7)
+
+        // Copy font styling from main SVG
+        textHalos.push(
+          `      <text x="${textX}" y="${textY}" font-size="${fontSize}px" font-family="${fullOps.font}" text-anchor="middle" font-weight="bold">${textToSvgText(chapter.name)}</text>`
+        )
+        textElements.push(
+          `    <text x="${textX}" y="${textY}" font-size="${fontSize}px" font-family="${fullOps.font}" text-anchor="middle" font-weight="bold">${textToSvgText(chapter.name)}</text>`
+        )
+      }
+    })
+
+    chapterSvg = `  <g id="chapters">
+${chapterRects.join('\n')}
+${textHalos.length > 0 ? `    <g stroke="white" opacity="0.5" paint-order="stroke fill markers" stroke-width="3" stroke-dasharray="none" stroke-linejoin="round" fill="transparent">\n${textHalos.join('\n')}\n    </g>\n` : ''}${textElements.join('\n')}
+  </g>
+`
+  }
+
   return `<svg class="funsvg" width="${round(fullOps.width)}" height="${round(y)}" xmlns="http://www.w3.org/2000/svg"
     font-size="${round(fullOps.titleHeight * 0.8)}px" font-family="${fullOps.font}"
 >
-${pieces.join('\n')}
+${chapterSvg}${pieces.join('\n')}
 </svg>`
 }
 
